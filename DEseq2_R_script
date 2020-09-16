@@ -1,0 +1,202 @@
+################################################################################
+#install R Studio                                                              #
+################################################################################
+
+see website:
+https://rstudio.com/products/rstudio/download/
+
+################################################################################
+#R packages installation  for analysis                                         #
+################################################################################
+
+#BiocManager，Install and manage packages from the Bioconductor project 
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(version = "3.11")
+#tximport, Import and summarize transcript-level estimates for transcript- and gene-level analysis
+BiocManager::install("tximport")
+#limma, Linear Models for Microarray Data
+BiocManager::install("limma")
+#DEseq2, Differential gene expression analysis based on the negative binomial distribution
+BiocManager::install("DESeq2")
+#vsn, Variance stabilization and calibration for microarray data
+BiocManager::install("vsn")
+#ggplot2, Declaratively creating graphics, based on The Grammar of Graphics
+BiocManager::install("ggplot2")
+#pheatmap, Implementation of heatmaps that offers more control over dimensions and appearance.
+BiocManager::install("pheatmap")
+
+################################################################################
+#input expression data                                                         #
+################################################################################
+
+## method 1: input un-normalized counts
+
+gene_counts <- read.table("./FGD5_AS1_counts.txt", header = T)
+
+## method 2: input transcript abundance files
+#example: the quantification data processed by RSEM was imported using tximport     
+#samples.txt, the characteristics of samples 
+condition <- factor(c(rep("CTRL", 3),rep("KD",3)))
+#"CTRL",control; "KD", knockdown
+sample <- c("nc1","nc2","nc3","sh1","sh2","sh3")
+#"nc", negative control; "sh", shRNA
+samples <- data.frame(sample,condition)
+samples
+write.table(samples,file="samples.txt")
+
+-----------------------------------------------------------------------------------results show
+  sample condition
+1    nc1      CTRL
+2    nc2      CTRL
+3    nc3      CTRL
+4    sh1        KD
+5    sh2        KD
+6    sh3        KD
+-----------------------------------------------------------------------------------results show
+
+#tx2gene.txt, transcript ID and gene ID
+TXNAME <- nc1.isoforms[,1] #transcript ID
+GENEID <- nc1.isoforms[,2] #gene ID
+tx2gene <- data.frame(TXNAME,GENEID)
+write.table(tx2gene,file="tx2gene.txt")
+
+-----------------------------------------------------------------------------------results show
+    TXNAME                      GENEID
+1  ENSMUST00000000001.4_Gnai3-201  ENSMUSG00000000001.4_Gnai3
+2  ENSMUST00000000003.13_Pbsn-201  ENSMUSG00000000003.15_Pbsn
+3   ENSMUST00000114041.2_Pbsn-202  ENSMUSG00000000003.15_Pbsn
+4 ENSMUST00000000028.13_Cdc45-201 ENSMUSG00000000028.15_Cdc45
+5  ENSMUST00000096990.9_Cdc45-202 ENSMUSG00000000028.15_Cdc45
+6  ENSMUST00000115585.1_Cdc45-203 ENSMUSG00000000028.15_Cdc45
+-----------------------------------------------------------------------------------results show
+
+#input data using trimport
+library("tximport")
+#input samples.txt and tx2gene.txt
+samples <- read.table("./samples.txt", header = T) 
+tx2gene <- read.table("./gene_trans.txt", sep="\t", header = T)
+# input ".isoforms.results" files processed by RSEM
+setwd("/WORK/Project/fgd5as1/fgd5_isoform") #set the file path for input data
+files <- paste(samples$sample,".isoforms.results",sep="")
+#Import and summarize transcript-level estimates for transcript- and gene-level analysis
+txi.rsem <- tximport(files, type = "rsem", tx2gene = tx2gene, countsFromAbundance = c("lengthScaledTPM"))
+# type = c("none", "salmon", "sailfish", "alevin", "kallisto", "rsem", "stringtie")
+# countsFromAbundance = c("no", "scaledTPM", "lengthScaledTPM", "dtuScaledTPM")
+
+-----------------------------------------------------------------------------------results show
+reading in files with read_tsv
+1 2 3 4 5 6 
+summarizing abundance
+summarizing counts
+summarizing length
+-----------------------------------------------------------------------------------results show
+
+names(txi.rsem)
+summary(txi.rsem)
+-----------------------------------------------------------------------------------results show
+      Length Class  Mode     
+abundance           364290 -none- numeric  
+counts              364290 -none- numeric  
+length              364290 -none- numeric  
+countsFromAbundance      1 -none- character
+-----------------------------------------------------------------------------------results show
+
+################################################################################
+#dds matrix of files imprted by tximport                                       #
+################################################################################
+
+##coldata.dara.frame, the phenotypes of samples, such as genotype, gender, batch, age
+condition <- factor(c(rep("CTRL", 3),rep("KD",3)))
+#"CTRL",control; "KD", knockdown
+sample <- c("nc1","nc2","nc3","sh1","sh2","sh3")
+#"nc", negative control; "sh", shRNA
+coldata <- data.frame(condition, samples)
+rownames(coldata) <- coldata$sample
+coldata
+
+-----------------------------------------------------------------------------------results show
+ condition sample
+nc1      CTRL    nc1
+nc2      CTRL    nc2
+nc3      CTRL    nc3
+sh1        KD    sh1
+sh2        KD    sh2
+sh3        KD    sh3
+-----------------------------------------------------------------------------------results show
+
+# dds matrix
+library("DESeq2")
+dds <- DESeqDataSetFromTximport(txi.rsem, colData = coldata, design = ~ condition)
+#design also can be this if required, design = ~ condition + sex + batch
+
+-----------------------------------------------------------------------------------results show
+using just counts from tximport
+-----------------------------------------------------------------------------------results show
+
+#Pre-filtering (optional)
+dds <- dds[ rowSums(counts(dds)) > 10, ]
+#keep only rows that have at least 10 reads total
+
+################################################################################
+#remove batch effect if requied (optional)                                     #
+################################################################################
+
+# for other downstream analyses – e.g. for visualization or clustering 
+# it might be useful to work with transformed versions of the count data
+# two transformations, the VST (samples > 30) and the rlog (samples < 30)
+# to remove the dependence of the variance on the mean
+# particularly the high variance of the logarithm of count data when the mean is low
+rld <- rlog(dds) 
+#samples showed here are 6, so we choose rld for the count transformation
+
+# Plot PCA analysis before remove batch effect 
+library(ggplot2)
+pcaData <- plotPCA(rld, intgroup=c("condition", "batch"), returnData=TRUE) 
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=condition, shape = batch)) +
+  geom_point(size=2) +
+  xlim(-30, 20) +
+  ylim(-20, 20) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_text(aes(label=name),vjust=1)
+ggsave("myPCAWithBatchEffect.png")
+
+#cluster
+sampleDists <- dist(t(assay(rld)))
+hc <- hclust(sampleDists, method = "ward.D2")
+plot(hc, hang = -1)
+
+
+#here showed results of other items
+-----------------------------------------------------------------------------------results show
+
+
+-----------------------------------------------------------------------------------results show
+
+#remove batch effect by limma package
+library("limma")
+assay(rld) <- limma::removeBatchEffect(assay(rld), rld$batch)
+#Plot PCA analysis after remove batch effect 
+pcaData <- plotPCA(rld, intgroup=c("condition", "batch"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=condition, shape = batch)) +
+  geom_point(size=3) +
+  xlim(-30, 20) +
+  ylim(-15, 15) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  geom_text(aes(label=name),vjust=2)
+ggsave("myPCABatchEffectRemoved.png")
+
+#cluster
+sampleDists <- dist(t(assay(rld)))
+hc <- hclust(sampleDists, method = "ward.D2")
+plot(hc, hang = -1)
+
+#here showed results of other items
+-----------------------------------------------------------------------------------results show
+
+
+-----------------------------------------------------------------------------------results show
